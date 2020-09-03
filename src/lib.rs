@@ -21,8 +21,6 @@
 // Imports + Features                                                         //
 //============================================================================//
 
-#![feature(try_from)]
-
 // Standard Library:
 use std::iter;
 
@@ -31,7 +29,7 @@ use std::io::{self, Write, BufWriter, Read, BufRead, BufReader};
 use std::net::{TcpStream, ToSocketAddrs};
 
 use std::convert::{TryFrom, TryInto};
-use std::fmt::{self, Display, Debug, Formatter};
+use std::fmt::{self, Display, Debug};
 use std::error::Error;
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -74,12 +72,6 @@ macro_rules! impl_err_base {
                 $typ::IoError(err)
             }
         }
-
-        impl Display for $typ {
-            fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-                Debug::fmt(self, f)
-            }
-        }
     };
 }
 
@@ -111,6 +103,7 @@ pub enum TCEventsError {
     SendError(mpsc::SendError<AsyncNotify>),
     PoisonError,
 }
+
 
 impl_err_base!(TCEventsError);
 
@@ -177,7 +170,7 @@ impl Into<u32> for TCErrorKind {
 /// Conversions from error codes into as specified in
 /// `4. Replies` in the TorCP specification.
 impl TryFrom<u32> for TCErrorKind {
-    type Err = ();
+    type Error = ();
     fn try_from(code: u32) -> Result<Self, ()> {
         use TCErrorKind::*;
         match code {
@@ -239,18 +232,20 @@ pub enum TCError {
 impl_err_statused!(TCError);
 
 impl Error for TCError {
-    fn description(&self) -> &str {
-        match *self {
-            TCError::IoError(ref e)     => e.description(),
-            TCError::UnknownResponse    => description_unknown(),
-            TCError::TorError(ref kind) => description_kind(kind)
-        }
-    }
-
-    fn cause(&self) -> Option<&Error> {
+    fn cause(&self) -> Option<&dyn Error> {
         match *self {
             TCError::IoError(ref e) => Some(e),
             _                       => None
+        }
+    }
+}
+
+impl Display for TCError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            TCError::IoError(ref e)     => write!(f, "{}", e),
+            TCError::UnknownResponse    => write!(f, "{}", description_unknown()),
+            TCError::TorError(ref kind) => write!(f, "{}", description_kind(kind))
         }
     }
 }
@@ -284,23 +279,25 @@ impl From<RecvError> for TCAsyncError {
 }
 
 impl Error for TCAsyncError {
-    fn description(&self) -> &str {
-        use TCAsyncError::*;
-        match *self {
-            IoError(ref e)     => e.description(),
-            UnknownResponse    => description_unknown(),
-            TorError(ref kind) => description_kind(kind),
-            PoisonError        => "TCAsync: got poisoned.",
-            RecvError(ref e)   => e.description()
-        }
-    }
-
-    fn cause(&self) -> Option<&Error> {
+    fn cause(&self) -> Option<&dyn Error> {
         use TCAsyncError::*;
         match *self {
             IoError(ref e)   => Some(e),
             RecvError(ref e) => Some(e),
             _                => None
+        }
+    }
+}
+
+impl Display for TCAsyncError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use TCAsyncError::*;
+        match *self {
+            IoError(ref e)     => write!(f,"{}",e),
+            UnknownResponse    => write!(f,"{}",description_unknown()),
+            TorError(ref kind) => write!(f,"{}",description_kind(kind)),
+            PoisonError        => write!(f,"TCAsync: got poisoned."),
+            RecvError(ref e)   => write!(f,"{}",e),
         }
     }
 }
@@ -416,7 +413,7 @@ where R: BufRead,
         {
             let (status, end, msg) = read_line::<R, E>(read, &mut buf)?;
             handle_code::<E>(status)?;
-            rls.push(msg.trim_right().to_owned());
+            rls.push(msg.trim_end().to_owned());
             if end {
                 break;
             }
@@ -1029,7 +1026,7 @@ impl<T: Read + Write> TorLimited for TCAsync<T> {
         loop {
             let (status, end, msg) = self.sync_rx.recv()?;
             handle_code::<Self::Error>(status)?;
-            rls.push(msg.trim_right().to_owned());
+            rls.push(msg.trim_end().to_owned());
             if end {
                 break;
             }
